@@ -15,3 +15,17 @@ class FakeErpClient:
 
     def close(self) -> None:
         pass
+
+
+class FlakyErpClient(FakeErpClient):
+    def __init__(self, failures: int, error: Exception, erp_id: str = "ERP-0001") -> None:
+        super().__init__(erp_id=erp_id)
+        self.failures = failures
+        self.error = error
+
+    def create_supplier(self, supplier: SupplierIn) -> str:
+        self.calls.append(supplier)
+        if self.failures > 0:
+            self.failures -= 1
+            raise self.error
+        return self.erp_id

@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.security import APIKeyHeader
 
 from .config import Settings, get_settings
@@ -59,10 +59,14 @@ def health() -> dict[str, str]:
 @app.post("/api/v1/suppliers", response_model=SupplierOut, status_code=201)
 def create_supplier(
     supplier: SupplierIn,
+    response: Response,
     _: None = Depends(require_api_key),
     service: IntegrationService = Depends(get_service),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> SupplierOut:
-    record = service.create_supplier(supplier)
+    record = service.create_supplier(supplier, idempotency_key)
+    if idempotency_key:
+        response.headers["Idempotency-Key"] = idempotency_key
     return SupplierOut(
         integration_id=record.integration_id,
         status=record.status,

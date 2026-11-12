@@ -9,9 +9,13 @@ from tests.fakes import FakeErpClient
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
+def fake_erp() -> FakeErpClient:
+    return FakeErpClient()
+
+
+@pytest.fixture
+def client(fake_erp: FakeErpClient) -> Iterator[TestClient]:
     repository = IntegrationRepository()
-    fake_erp = FakeErpClient()
     app.dependency_overrides[get_repository] = lambda: repository
     app.dependency_overrides[get_erp_client] = lambda: fake_erp
     with TestClient(app) as test_client:

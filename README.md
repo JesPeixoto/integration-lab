@@ -1,25 +1,25 @@
 # Integration Lab
 
-A small REST/JSON integration service talking to a legacy XML ERP.
+Uma API REST em Python que conversa com um ERP legado via XML.
 
-This project demonstrates how I design integrations between modern APIs and
-legacy systems: explicit contracts, authentication, error mapping, structured
-logs, tests, Docker, and CI.
+Este projeto demonstra como eu estruturo integrações entre sistemas modernos e
+legados: contrato explícito, autenticação, idempotência, retry, tratamento de
+erros, logs, testes, Docker e CI.
 
-> No proprietary code or data. The ERP is a mock service created for this lab.
+> Nenhum código ou dado proprietário. O ERP é um serviço simulado criado para o lab.
 
-## Architecture
+## Arquitetura
 
 ```mermaid
 flowchart LR
     Client -->|JSON + API key| API[Integration API]
     API -->|XML + API key| ERP[Mock ERP]
-    API --> Store[(Integration status)]
+    API --> Store[(Status das integrações)]
 ```
 
-The API receives JSON at the edge, validates it, converts it to XML, and calls
-the legacy ERP. The ERP response is mapped back to JSON. Integration status is
-kept in memory for this first version.
+A API recebe JSON, valida com Pydantic, converte para XML e chama o ERP legado.
+A resposta XML é convertida de volta para JSON. O status fica em memória nesta
+primeira versão.
 
 ## Stack
 
@@ -30,7 +30,7 @@ kept in memory for this first version.
 - Docker Compose
 - GitHub Actions
 
-## Quickstart
+## Como rodar
 
 ```bash
 python -m venv .venv
@@ -38,34 +38,35 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-Run the mock ERP:
+Rode o ERP simulado:
 
 ```bash
 uvicorn integration_lab.mock_erp:app --reload --port 8001
 ```
 
-Run the integration API in another terminal:
+Em outro terminal, rode a API:
 
 ```bash
 uvicorn integration_lab.main:app --reload --port 8000
 ```
 
-Or run everything with Docker:
+Ou rode tudo com Docker:
 
 ```bash
 docker compose up --build
 ```
 
-## Example
+## Exemplo
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/suppliers \
   -H "Content-Type: application/json" \
   -H "X-API-Key: dev-api-key" \
+  -H "Idempotency-Key: supplier-123" \
   -d '{"name":"Fornecedor Exemplo","document":"12345678000199","email":"contato@exemplo.com"}'
 ```
 
-Response:
+Resposta:
 
 ```json
 {
@@ -77,18 +78,36 @@ Response:
 
 ## Endpoints
 
-| Method | Path | Description |
+| Método | Rota | Descrição |
 | --- | --- | --- |
 | GET | `/health` | Health check |
-| POST | `/api/v1/suppliers` | Create a supplier in the mock ERP |
-| GET | `/api/v1/integrations/{id}` | Check an integration status |
+| POST | `/api/v1/suppliers` | Cria um fornecedor no ERP simulado |
+| GET | `/api/v1/integrations/{id}` | Consulta o status de uma integração |
 
-Authentication uses the `X-API-Key` header. The default development key is
-`dev-api-key`; change it with the `API_KEY` environment variable.
+A autenticação usa o header `X-API-Key`. A chave padrão de desenvolvimento é
+`dev-api-key`; altere com a variável `API_KEY`.
 
-## Error handling
+## Idempotência e retry
 
-Errors follow a Problem Details-inspired shape:
+Envie o header `Idempotency-Key` para tornar o `POST /api/v1/suppliers` seguro
+para repetir:
+
+- mesma chave + mesmo payload → devolve o resultado original, sem criar duplicata;
+- mesma chave + payload diferente → `409`;
+- falha transitória → a chave é liberada para o cliente tentar de novo.
+
+O cliente do ERP tenta novamente em timeout, `429` e `5xx`, com backoff
+exponencial e jitter. Erros `4xx` de negócio não são repetidos. As variáveis:
+
+| Variável | Padrão | Descrição |
+| --- | --- | --- |
+| `ERP_MAX_ATTEMPTS` | `3` | Número máximo de tentativas |
+| `ERP_RETRY_BASE_SECONDS` | `0.2` | Espera inicial |
+| `ERP_RETRY_MAX_SECONDS` | `2.0` | Espera máxima |
+
+## Tratamento de erros
+
+Os erros seguem um formato inspirado em Problem Details:
 
 ```json
 {
@@ -100,10 +119,10 @@ Errors follow a Problem Details-inspired shape:
 }
 ```
 
-The API distinguishes validation errors (`422`) from ERP failures (`503`) and
-logs each request with a correlation ID (`X-Request-ID`).
+A API diferencia erro de validação (`422`) de falha do ERP (`503`) e registra
+cada requisição com um correlation ID (`X-Request-ID`).
 
-## Tests
+## Testes
 
 ```bash
 pytest
@@ -111,26 +130,32 @@ ruff check .
 ruff format --check .
 ```
 
-## Design decisions
+## Decisões de projeto
 
-- **JSON at the edge, XML at the boundary.** The public API stays simple; the
-  legacy contract is isolated in one adapter.
-- **Explicit error mapping.** Timeouts and 5xx responses become `503`; business
-  validation from the ERP becomes `422`.
-- **Service-to-service auth.** Both the public API and the ERP call require an
-  API key.
-- **Structured logs.** JSON logs include a request ID and never include secrets.
-- **In-memory status for now.** The next step is persistence with SQLite or
+- **JSON na borda, XML no limite.** A API pública fica simples; o contrato legado
+  fica isolado em um adapter.
+- **Idempotência no cliente.** A chave evita duplicidade em retries do cliente.
+  Em produção, o ideal é propagar a chave para o ERP ou ter uma checagem de
+  duplicidade no destino.
+- **Retry só no que é transitório.** Timeout, `429` e `5xx` podem ser repetidos;
+  erro de negócio (`4xx`) não.
+- **Autenticação entre serviços.** A API e o ERP exigem API key.
+- **Logs estruturados.** Os logs incluem request ID e não expõem segredos.
+- **Status em memória por enquanto.** O próximo passo é persistir em SQLite ou
   PostgreSQL.
 
-## Next steps
+## Próximos passos
 
-- Idempotency keys for `POST /api/v1/suppliers`
-- Retry with exponential backoff and jitter
-- Persistence and integration history
-- Metrics and a small dashboard
-- Contract tests against the mock ERP
+- Persistência e histórico de integrações
+- Métricas e um dashboard simples
+- Testes de contrato contra o ERP simulado
+- Outbox pattern ou fila para desacoplar o processamento
 
-## License
+## Documentação
 
-This project is available for study and portfolio purposes.
+- [`docs/como-funciona.md`](docs/como-funciona.md) — explicação em português do
+  fluxo, das decisões e dos pontos para estudar antes de uma entrevista.
+
+## Licença
+
+Projeto disponível para estudo e portfólio.

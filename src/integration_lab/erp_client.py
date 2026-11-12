@@ -1,4 +1,7 @@
-from collections.abc import Iterator
+import logging
+import random
+import time
+from collections.abc import Callable, Iterator
 from xml.etree import ElementTree
 from xml.etree.ElementTree import Element, SubElement, tostring
 
@@ -9,9 +12,18 @@ from .config import Settings, get_settings
 from .errors import ErpUnavailableError, ErpValidationError
 from .schemas import SupplierIn
 
+_log = logging.getLogger(__name__)
+
 
 class ErpClient:
-    def __init__(self, settings: Settings, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.Client | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self._settings = settings
+        self._sleep = sleep
         self._client = client or httpx.Client(
             base_url=settings.erp_base_url,
             timeout=settings.erp_timeout_seconds,
@@ -23,23 +35,50 @@ class ErpClient:
 
     def create_supplier(self, supplier: SupplierIn) -> str:
         xml = self._to_xml(supplier)
-        try:
-            response = self._client.post(
-                "/erp/suppliers",
-                content=xml,
-                headers={"Content-Type": "application/xml"},
+        max_attempts = self._settings.erp_max_attempts
+        last_error: Exception | None = None
+
+        for attempt in range(max_attempts):
+            try:
+                response = self._client.post(
+                    "/erp/suppliers",
+                    content=xml,
+                    headers={"Content-Type": "application/xml"},
+                )
+            except httpx.TimeoutException:
+                last_error = ErpUnavailableError("ERP timed out")
+            except httpx.TransportError as exc:
+                last_error = ErpUnavailableError(f"ERP request failed: {exc}")
+            else:
+                if response.status_code == 429 or response.status_code >= 500:
+                    last_error = ErpUnavailableError(f"ERP returned HTTP {response.status_code}")
+                elif response.status_code >= 400:
+                    raise ErpValidationError(self._extract_error(response.text))
+                else:
+                    return self._parse_id(response.text)
+
+            if attempt == max_attempts - 1:
+                assert last_error is not None
+                raise last_error
+
+            _log.warning(
+                "Transient ERP failure (attempt %d/%d): %s",
+                attempt + 1,
+                max_attempts,
+                last_error,
             )
-        except httpx.TimeoutException as exc:
-            raise ErpUnavailableError("ERP timed out") from exc
-        except httpx.HTTPError as exc:
-            raise ErpUnavailableError(f"ERP request failed: {exc}") from exc
+            self._sleep_before_retry(attempt)
 
-        if response.status_code >= 500:
-            raise ErpUnavailableError(f"ERP returned HTTP {response.status_code}")
-        if response.status_code >= 400:
-            raise ErpValidationError(self._extract_error(response.text))
+        raise ErpUnavailableError("ERP request failed after retries")
 
-        return self._parse_id(response.text)
+    def _sleep_before_retry(self, attempt: int) -> None:
+        delay = min(
+            self._settings.erp_retry_base_seconds * (2**attempt),
+            self._settings.erp_retry_max_seconds,
+        )
+        if delay > 0:
+            delay += random.uniform(0, delay * 0.1)
+        self._sleep(delay)
 
     @staticmethod
     def _to_xml(supplier: SupplierIn) -> str:

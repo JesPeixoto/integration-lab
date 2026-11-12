@@ -24,6 +24,18 @@ class ErpValidationError(IntegrationError):
     title = "ERP rejected the payload"
 
 
+class IdempotencyConflictError(IntegrationError):
+    code = "idempotency_conflict"
+    status_code = 409
+    title = "Idempotency key conflict"
+
+
+class IdempotencyInProgressError(IntegrationError):
+    code = "idempotency_in_progress"
+    status_code = 409
+    title = "Request already in progress"
+
+
 async def integration_error_handler(request: Request, exc: IntegrationError) -> JSONResponse:
     return JSONResponse(
         status_code=exc.status_code,
