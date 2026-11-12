@@ -1,0 +1,151 @@
+Metadata-Version: 2.4
+Name: integration-lab
+Version: 0.1.0
+Summary: A small REST/JSON integration service talking to a legacy XML ERP.
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi<1.0,>=0.115
+Requires-Dist: uvicorn[standard]<1.0,>=0.34
+Requires-Dist: httpx<1.0,>=0.28
+Requires-Dist: pydantic<3.0,>=2.10
+Requires-Dist: pydantic-settings<3.0,>=2.7
+Provides-Extra: dev
+Requires-Dist: pytest<10.0,>=8.3; extra == "dev"
+Requires-Dist: ruff<1.0,>=0.9; extra == "dev"
+
+# Integration Lab
+
+A small REST/JSON integration service talking to a legacy XML ERP.
+
+This project demonstrates how I design integrations between modern APIs and
+legacy systems: explicit contracts, authentication, error mapping, structured
+logs, tests, Docker, and CI.
+
+> No proprietary code or data. The ERP is a mock service created for this lab.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Client -->|JSON + API key| API[Integration API]
+    API -->|XML + API key| ERP[Mock ERP]
+    API --> Store[(Integration status)]
+```
+
+The API receives JSON at the edge, validates it, converts it to XML, and calls
+the legacy ERP. The ERP response is mapped back to JSON. Integration status is
+kept in memory for this first version.
+
+## Stack
+
+- Python 3.12+
+- FastAPI + Pydantic
+- httpx
+- pytest + ruff
+- Docker Compose
+- GitHub Actions
+
+## Quickstart
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[dev]"
+```
+
+Run the mock ERP:
+
+```bash
+uvicorn integration_lab.mock_erp:app --reload --port 8001
+```
+
+Run the integration API in another terminal:
+
+```bash
+uvicorn integration_lab.main:app --reload --port 8000
+```
+
+Or run everything with Docker:
+
+```bash
+docker compose up --build
+```
+
+## Example
+
+```bash
+curl -X POST http://localhost:8000/api/v1/suppliers \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: dev-api-key" \
+  -d '{"name":"Fornecedor Exemplo","document":"12345678000199","email":"contato@exemplo.com"}'
+```
+
+Response:
+
+```json
+{
+  "integration_id": "4f4f0f0e-7a4d-4c1e-9b0e-2f4c8a1d2e3f",
+  "status": "success",
+  "erp_id": "ERP-0001"
+}
+```
+
+## Endpoints
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/health` | Health check |
+| POST | `/api/v1/suppliers` | Create a supplier in the mock ERP |
+| GET | `/api/v1/integrations/{id}` | Check an integration status |
+
+Authentication uses the `X-API-Key` header. The default development key is
+`dev-api-key`; change it with the `API_KEY` environment variable.
+
+## Error handling
+
+Errors follow a Problem Details-inspired shape:
+
+```json
+{
+  "type": "https://integration-lab.dev/errors/erp_unavailable",
+  "title": "ERP unavailable",
+  "status": 503,
+  "detail": "ERP timed out",
+  "instance": "/api/v1/suppliers"
+}
+```
+
+The API distinguishes validation errors (`422`) from ERP failures (`503`) and
+logs each request with a correlation ID (`X-Request-ID`).
+
+## Tests
+
+```bash
+pytest
+ruff check .
+ruff format --check .
+```
+
+## Design decisions
+
+- **JSON at the edge, XML at the boundary.** The public API stays simple; the
+  legacy contract is isolated in one adapter.
+- **Explicit error mapping.** Timeouts and 5xx responses become `503`; business
+  validation from the ERP becomes `422`.
+- **Service-to-service auth.** Both the public API and the ERP call require an
+  API key.
+- **Structured logs.** JSON logs include a request ID and never include secrets.
+- **In-memory status for now.** The next step is persistence with SQLite or
+  PostgreSQL.
+
+## Next steps
+
+- Idempotency keys for `POST /api/v1/suppliers`
+- Retry with exponential backoff and jitter
+- Persistence and integration history
+- Metrics and a small dashboard
+- Contract tests against the mock ERP
+
+## License
+
+This project is available for study and portfolio purposes.

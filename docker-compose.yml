@@ -1,0 +1,20 @@
+services:
+  mock-erp:
+    build: .
+    command: uvicorn integration_lab.mock_erp:app --host 0.0.0.0 --port 8001
+    environment:
+      ERP_API_KEY: dev-erp-key
+    ports:
+      - "8001:8001"
+
+  integration-api:
+    build: .
+    command: uvicorn integration_lab.main:app --host 0.0.0.0 --port 8000
+    environment:
+      API_KEY: dev-api-key
+      ERP_BASE_URL: http://mock-erp:8001
+      ERP_API_KEY: dev-erp-key
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mock-erp
